@@ -52,10 +52,10 @@
 
    ```shell
    # Перенаправление порта 80 (HTTP) на Caddy
-   /ip firewall nat add chain=dstnat dst-address=185.160.217.246 protocol=tcp dst-port=80 action=dst-nat to-addresses=192.168.2.21 to-ports=80 comment="Port Forward HTTP to Caddy"
+   /ip firewall nat add chain=dstnat dst-address=`Ваш белый IP-адрес` protocol=tcp dst-port=80 action=dst-nat to-addresses=192.168.2.21 to-ports=80 comment="Port Forward HTTP to Caddy"
 
    # Перенаправление порта 443 (HTTPS) на Caddy
-   /ip firewall nat add chain=dstnat dst-address=185.160.217.246 protocol=tcp dst-port=443 action=dst-nat to-addresses=192.168.2.21 to-ports=443 comment="Port Forward HTTPS to Caddy"
+   /ip firewall nat add chain=dstnat dst-address=`Ваш белый IP-адрес` protocol=tcp dst-port=443 action=dst-nat to-addresses=192.168.2.21 to-ports=443 comment="Port Forward HTTPS to Caddy"
    ```
 
    **Пояснения:**
@@ -124,20 +124,24 @@
 
 1. **Создайте директории для хранения данных:**
 
-   Используя SSH или файловый менеджер RouterOS, создайте папки на файловой системе:
+   Используя файловый менеджер RouterOS, создайте папки на файловой системе:
 
    - Для Vaultwarden: `/disk1/vaultwarden/data`
    - Для Caddy: `/disk1/caddy/data`
 
-   ```shell
-   /file print
-   /file mkdir disk1/vaultwarden
-   /file mkdir disk1/vaultwarden/data
-   /file mkdir disk1/caddy
-   /file mkdir disk1/caddy/data
-   ```
-
    **Примечание:** Убедитесь, что диск `disk1` доступен и имеет достаточное место.
+
+1.1. **Смонтируйте хранилища для хранения данных:**
+
+ ```shell
+   /container/mounts/add name="Vault_DATA" src="/sd1-part1/vaultwarden_data" dst="/data"
+   /container/mounts/add name="caddy_data" src="/sd1-part1/Caddy_data" dst="/etc/caddy" 
+   ```
+   
+**Пояснения:**
+
+   - `name="Vault_DATA" src="/sd1-part1/vaultwarden_data" dst="/data"`: монтирование постоянного хранилища и данных для vaultwarden.
+   - `name="caddy_data" src="/sd1-part1/Caddy_data" dst="/etc/caddy"`: монтирование постоянного хранилища и данных для caddy.
 
 2. **Назначьте права доступа (если необходимо):**
 
@@ -149,11 +153,20 @@ Vaultwarden — это легковесная альтернатива Bitwarden
 
 **Шаги:**
 
-1. **Загрузите Docker-образ Vaultwarden:**
+1. **Настройте виртуальный интерфейс мостовую сеть. Создайте мост для контейнеров:**
 
    ```shell
-   /container image pull vaultwarden/server:latest
+   /interface/veth/add address=192.168.2.20 gateway=192.168.2.1 name=veth1
+   /interface bridge add name=container_bridge
+   /interface bridge port add bridge=container_bridge interface=veth1
    ```
+   
+**Пояснения:**
+
+   - `address=192.168.2.20`: IP-адрес Vaultwarden.
+   - `gateway=192.168.2.1`: IP-адрес шлюза.
+   - `name=container_bridge`: имя моста.
+   - `interface=veth1`:  виртуальный интерфейс Vaultwarden.
 
 2. **Создайте контейнер Vaultwarden:**
 
@@ -186,13 +199,18 @@ Caddy — это современный веб-сервер с автомати�
 
 **Шаги:**
 
-1. **Загрузите Docker-образ Caddy:**
+1. **Настройте виртуальный интерфейс Caddy:**
 
    ```shell
-   /container image pull caddy:latest
+   /interface/veth/add address=192.168.2.21 gateway=192.168.2.1 name=veth1
    ```
+   - `address=192.168.2.21`: IP-адрес Caddy.
+   - `gateway=192.168.2.1`: IP-адрес шлюза.
+   - `name=veth1`: имя виртуального интерфейса.
 
 2. **Создайте конфигурационный файл Caddy:**
+
+   Caddy автоматически управляет SSL-сертификатами через Let's Encrypt. Однако для корректной работы необходимо убедиться в правильности конфигурации.
 
    Перед созданием контейнера создадим конфигурационный файл `Caddyfile`.
 
@@ -204,14 +222,20 @@ Caddy — это современный веб-сервер с автомати�
 
    ```caddyfile
    pass.vault.ru {
-       reverse_proxy 192.168.2.20:8080
-       log {
-           output file /data/caddy/access.log
-           level INFO
-       }
-       tls {
-           on_demand
-       }
+	  reverse_proxy 192.168.2.20:80 {
+		  header_up X-Real-IP {remote_host}
+			 }
+	 log  {
+		 level INFO
+		 output file /data/access.log {
+		 roll_size 10MB
+	 	 roll_keep 10
+	 	}
+	 }
+
+     tls ВАЩ@ЭЛЕКТРОННЫЙ.АДРЕС {
+         protocols tls1.2 tls1.3
+     }
    }
    ```
 
@@ -220,11 +244,11 @@ Caddy — это современный веб-сервер с автомати�
    - `pass.vault.ru`: домен для доступа.
    - `reverse_proxy`: перенаправление трафика на Vaultwarden.
    - `log`: настройка логирования.
-   - `tls`: автоматическое получение SSL-сертификата через Let's Encrypt.
+   - `tls`: указывает email для регистрации в Let's Encrypt (замените `ВАЩ@ЭЛЕКТРОННЫЙ.АДРЕС` на ваш реальный email).
 
    **Сохраните файл как `/disk1/caddy/Caddyfile`.**
 
-3. **Создайте контейнер Caddy:**
+4. **Создайте контейнер Caddy:**
 
    ```shell
    /container add name=caddy \
@@ -241,13 +265,13 @@ Caddy — это современный веб-сервер с автомати�
    - `volumes`: монтирование конфигурационного файла и постоянного хранилища.
    - `restart-policy=always`: автоматический перезапуск контейнера при сбоях.
 
-4. **Запустите контейнер:**
+5. **Запустите контейнер:**
 
    ```shell
    /container start caddy
    ```
 
-5. **Проверьте статус контейнера:**
+6. **Проверьте статус контейнера:**
 
    ```shell
    /container print
@@ -264,23 +288,31 @@ Caddy автоматически управляет SSL-сертификатам
 **Пример `Caddyfile`:**
 
 ```caddyfile
-pass.vault.ru {
-    reverse_proxy 192.168.2.20:8080
+   pass.vault.ru {
+	  reverse_proxy 192.168.2.20:80 {
+		  header_up X-Real-IP {remote_host}
+			 }
+	 log  {
+		 level INFO
+		 output file /data/access.log {
+		 roll_size 10MB
+	 	 roll_keep 10
+	 	}
+	 }
 
-    log {
-        output file /data/caddy/access.log
-        level INFO
-    }
+     tls ВАЩ@ЭЛЕКТРОННЫЙ.АДРЕС {
+         protocols tls1.2 tls1.3
+     }
+   }
+   ```
 
-    tls youremail@example.com
-}
-```
+   **Пояснения:**
 
-**Пояснения:**
+   - `pass.vault.ru`: домен для доступа.
+   - `reverse_proxy`: перенаправление трафика на Vaultwarden.
+   - `log`: настройка логирования.
+   - `tls`: указывает email для регистрации в Let's Encrypt (замените `ВАЩ@ЭЛЕКТРОННЫЙ.АДРЕС` на ваш реальный email).
 
-- `reverse_proxy`: перенаправляет запросы на Vaultwarden.
-- `log`: настраивает логирование.
-- `tls`: указывает email для регистрации в Let's Encrypt (замените `youremail@example.com` на ваш реальный email).
 
 **Шаги по обновлению Caddyfile:**
 
